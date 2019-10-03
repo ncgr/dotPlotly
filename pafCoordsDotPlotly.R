@@ -4,6 +4,7 @@
 suppressPackageStartupMessages(library(optparse))
 suppressPackageStartupMessages(library(ggplot2))
 suppressPackageStartupMessages(library(plotly))
+suppressPackageStartupMessages(library(stringr))
 
 option_list <- list(
   make_option(c("-i","--input"), type="character", default=NULL,
@@ -73,15 +74,27 @@ if(opt$v){
 opt$output_filename = unlist(strsplit(opt$output_filename, "/"))[length(unlist(strsplit(opt$output_filename, "/")))]
 
 # read in alignments
-alignments = read.table(opt$input_filename, stringsAsFactors = F, fill = T)
+alignments = read.table(opt$input_filename, header=F, stringsAsFactors = F, fill = T, row.names = NULL)
 
 # set column names
 # PAF IS ZERO-BASED - CHECK HOW CODE WORKS
 colnames(alignments)[1:12] = c("queryID","queryLen","queryStart","queryEnd","strand","refID","refLen","refStart","refEnd","numResidueMatches","lenAln","mapQ")
 
+# filter out secondary alignments
+#TODO: if secondaries left in, will need to figure out how to dealk with de:f not being in a fixed columm
+if(ncol(alignments) > 12){
+   alignments = alignments[which(alignments$V13 == "tp:A:P"),]
+}
+#colnames(alignments)[21] = "dvrg"
+colnames(alignments)[14] = "dvrg"
+
 # Fixes for PAF
 # Some measure of similarity - need to check on this
-alignments$percentID = alignments$numResidueMatches / alignments$lenAln
+alignments$percentID = 1-as.numeric(str_replace(alignments$dvrg,"d[ev]:f:",""))
+#cat(alignments$dvrg)
+#cat("\n")
+#cat(alignments$percentID)
+#alignments$percentID = alignments$numResidueMatches / alignments$lenAln
 queryStartTemp = alignments$queryStart
 # Flip starts, ends for negative strand alignments
 alignments$queryStart[which(alignments$strand == "-")] = alignments$queryEnd[which(alignments$strand == "-")]
@@ -183,11 +196,17 @@ alignments$queryEnd2 = alignments$queryEnd +     sapply(as.character(alignments$
 if(opt$on_target & length(levels(alignments$refID)) > 1){
   alignments$queryTarget = queryID_Ref[match(as.character(alignments$queryID), names(queryID_Ref))]
   alignmentsOnTarget = alignments[which(as.character(alignments$refID) == alignments$queryTarget),]
-  scaffoldIDmean = tapply(alignmentsOnTarget$percentID, alignmentsOnTarget$queryID, mean)
+  scaffoldIDmean = sapply(unique(as.character(alignmentsOnTarget$queryID)), function(x)
+    weighted.mean(x = alignmentsOnTarget$percentID[which(as.character(alignmentsOnTarget$queryID) == x)], 
+                  w = alignmentsOnTarget$lenAln[which(as.character(alignmentsOnTarget$queryID) == x)])
+  )
   alignments$percentIDmean = as.numeric(scaffoldIDmean[match(as.character(alignments$queryID), names(scaffoldIDmean))])
   alignments$percentIDmean[which(as.character(alignments$refID) != alignments$queryTarget)] = NA
 } else{
-  scaffoldIDmean = tapply(alignments$percentID, alignments$queryID, mean)
+  scaffoldIDmean = sapply(unique(as.character(alignments$queryID)), function(x)
+    weighted.mean(x = alignments$percentID[which(as.character(alignments$queryID) == x)], 
+                  w = alignments$lenAln[which(as.character(alignments$queryID) == x)])
+  )
   alignments$percentIDmean = as.numeric(scaffoldIDmean[match(as.character(alignments$queryID), names(scaffoldIDmean))])
 }
 
@@ -222,22 +241,23 @@ if (opt$similarity) {
           round(lenAln / 1000, 1)
         )
       )
-    ) +
+    ) + scale_colour_gradient(low = "blue", high = "red") +
     scale_x_continuous(breaks = cumsum(as.numeric(chromMax)),
                        labels = levels(alignments$refID)) +
     theme_bw() +
-    theme(text = element_text(size = 8)) +
+    theme(text = element_text(size = 12)) +
     theme(
       panel.grid.major.y = element_blank(),
       panel.grid.minor.y = element_blank(),
       panel.grid.minor.x = element_blank(),
-      axis.text.y = element_text(size = 4, angle = 15)
+      axis.text.y = element_text(size = 8, angle = 0),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
     ) +
     scale_y_continuous(breaks = yTickMarks, labels = substr(levels(alignments$queryID), start = 1, stop = 20)) +
     { if(opt$h_lines){ geom_hline(yintercept = yTickMarks,
                                   color = "grey60",
                                   size = .1) }} +
-    scale_color_distiller(palette = "Spectral") +
+    #scale_color_distiller(palette = "Spectral") +
     labs(color = "Mean Percent Identity (per query)", 
          title = paste0(   paste0("Post-filtering number of alignments: ", nrow(alignments),"\t\t\t\t"),
                            paste0("minimum alignment length (-m): ", opt$min_align,"\n"),
@@ -276,7 +296,8 @@ if (opt$similarity) {
       panel.grid.major.y = element_blank(),
       panel.grid.minor.y = element_blank(),
       panel.grid.minor.x = element_blank(),
-      axis.text.y = element_text(size = 4, angle = 15)
+      axis.text.y = element_text(size = 4, angle = 15),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
     ) +
     scale_y_continuous(breaks = yTickMarks, labels = substr(levels(alignments$queryID), start = 1, stop = 20)) +
     { if(opt$h_lines){ geom_hline(yintercept = yTickMarks,
@@ -296,7 +317,8 @@ ggsave(filename = paste0(opt$output_filename, ".png"), width = opt$plot_size, he
 
 if(opt$interactive){
   pdf(NULL)
-  gply = ggplotly(gp, tooltip = "text")
+  #gply = ggplotly(gp, tooltip = "text",width=1800,height=1800,dynamicTicks = TRUE)
+  gply = ggplotly(gp, tooltip = "text",width=2000,height=1000,dynamicTicks = FALSE)
   htmlwidgets::saveWidget(as.widget(gply), file = paste0(opt$output_filename, ".html"))
 }
 
